@@ -3,16 +3,15 @@ package main
 import (
 	"crypto/ecdsa"
 	"fmt"
-	"io/ioutil"
-	"strings"
+	"os"
 	"time"
 
-	jwt "github.com/dgrijalva/jwt-go"
+	jwt "github.com/golang-jwt/jwt/v5"
 )
 
 type customClaims struct {
 	UserID string `json:"user_id"`
-	jwt.StandardClaims
+	jwt.RegisteredClaims
 }
 
 // GenerateJWT generates token string
@@ -20,9 +19,9 @@ func GenerateJWT() (tokenString string, err error) {
 	// Create the Claims
 	claims := customClaims{
 		UserID: "user1",
-		StandardClaims: jwt.StandardClaims{
-			IssuedAt:  time.Now().Unix(),
-			ExpiresAt: time.Now().Add(time.Minute * 60).Unix(),
+		RegisteredClaims: jwt.RegisteredClaims{
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Minute * 1)),
 		},
 	}
 
@@ -30,7 +29,7 @@ func GenerateJWT() (tokenString string, err error) {
 	token := jwt.NewWithClaims(jwt.SigningMethodES256, claims)
 
 	// Read the private key file
-	key, err := ioutil.ReadFile("ec256-private.pem")
+	key, err := os.ReadFile("ec256-private.pem")
 	if err != nil {
 		fmt.Println("Error in reading private key")
 		return "", err
@@ -56,37 +55,27 @@ func GenerateJWT() (tokenString string, err error) {
 // ParseJWT parses JWT token
 func ParseJWT(tokenString string) (bool, error) {
 
-	// Parse Unverified parses just claims parts and does not verify the signature part
-	token, _, err := new(jwt.Parser).ParseUnverified(tokenString, &customClaims{})
-	if err != nil {
-		return false, err
-	}
-
-	if claims, ok := token.Claims.(*customClaims); ok {
-		fmt.Println("User ID:", claims.UserID)
-	} else {
-		fmt.Println("Error in custom claims")
-		return false, err
-	}
-
-	key, err := ioutil.ReadFile("ec256-public.pem")
+	key, err := os.ReadFile("ec256-public.pem")
 	if err != nil {
 		fmt.Println("Error in reading public key")
 		return false, err
 	}
 
-	var ecdsaKey *ecdsa.PublicKey
-	if ecdsaKey, err = jwt.ParseECPublicKeyFromPEM(key); err != nil {
-		fmt.Printf("Unable to parse ECDSA public key: %v", err)
-		return false, err
-	}
-
-	parts := strings.Split(tokenString, ".")
-	method := jwt.GetSigningMethod("ES256")
-	err = method.Verify(strings.Join(parts[0:2], "."), parts[2], ecdsaKey)
+	token, err := jwt.ParseWithClaims(tokenString, &customClaims{}, func(token *jwt.Token) (interface{}, error) {
+		return jwt.ParseECPublicKeyFromPEM(key)
+	})
 	if err != nil {
-		fmt.Printf("Error while verifying key: %v", err)
+		fmt.Println("Error in parsing JWT:", err.Error())
 		return false, err
+	} else if claims, ok := token.Claims.(*customClaims); ok && token.Valid {
+		fmt.Println("User ID:", claims.UserID)
+	} else {
+		fmt.Println("Error in custom claims or token is invalid")
+		return false, fmt.Errorf("invalid token")
+	}
+	if !token.Valid {
+		fmt.Println("Token is invalid")
+		return false, fmt.Errorf("invalid token")
 	}
 	return true, nil
 }
